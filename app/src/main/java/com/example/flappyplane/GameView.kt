@@ -176,8 +176,12 @@ class GameView @JvmOverloads constructor(
 
         canvas.drawText(score.toString(), width / 2f, 150f, scorePaint)
 
-        if (!isRunning && !isGameOver) {
+            if (!isRunning && !isGameOver) {
             canvas.drawText("Тапни по экрану, чтобы взлететь", width / 2f, height / 2f, messagePaint)
         }
         if (isGameOver) {
-            canvas.drawText("Игра
+            canvas.drawText("Игра окончена. Счёт: $score", width / 2f, height / 2f, messagePaint)
+            canvas.drawText("Тапни, чтобы начать заново", width / 2f, height / 2f + 90f, messagePaint)
+        }
+    }
+}
