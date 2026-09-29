@@ -3,8 +3,11 @@ package com.example.flappyplane
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.Choreographer
 import android.view.MotionEvent
@@ -23,9 +26,6 @@ class GameView @JvmOverloads constructor(
     private val pipeSpeed = 6f
     private val planeSize = 90f
     private val pipeSpawnInterval = 90
-
-    // Насколько сильно может отличаться высота проёма от предыдущей трубы.
-    // Не даёт трубам "прыгать" слишком резко по высоте.
     private val maxGapShiftFraction = 0.28f
 
     private var planeX = 0f
@@ -38,30 +38,197 @@ class GameView @JvmOverloads constructor(
     private var frameCount = 0
     private var lastGapTop: Float? = null
 
+    private data class Cloud(var x: Float, val y: Float, val scale: Float)
+    private val clouds = mutableListOf<Cloud>()
+
     private var score = 0
     private var isRunning = false
     private var isGameOver = false
     private var groundY = 0f
 
-    private val skyPaint = Paint().apply { color = Color.parseColor("#87CEEB") }
-    private val groundPaint = Paint().apply { color = Color.parseColor("#DEB887") }
-    private val pipePaint = Paint().apply { color = Color.parseColor("#4CAF50") }
-    private val planePaint = Paint().apply { color = Color.parseColor("#F44336") }
-    private val planeWindowPaint = Paint().apply { color = Color.WHITE }
+    // ---- Небо и фон ----
+    private val skyPaint = Paint()
+    private val sunGlowPaint = Paint().apply {
+        color = Color.parseColor("#FFF59D")
+        isAntiAlias = true
+    }
+    private val sunPaint = Paint().apply {
+        color = Color.parseColor("#FFEB3B")
+        isAntiAlias = true
+    }
+    private val cloudPaint = Paint().apply {
+        color = Color.WHITE
+        alpha = 230
+        isAntiAlias = true
+    }
+
+    // ---- Земля ----
+    private val groundPaint = Paint()
+    private val grassPaint = Paint().apply {
+        color = Color.parseColor("#6FBF73")
+        isAntiAlias = true
+    }
+
+    // ---- Трубы ----
+    private val pipePaint = Paint().apply {
+        color = Color.parseColor("#43A047")
+        isAntiAlias = true
+    }
+    private val pipeOutlinePaint = Paint().apply {
+        color = Color.parseColor("#2E7D32")
+        style = Paint.Style.STROKE
+        strokeWidth = 5f
+        isAntiAlias = true
+    }
+    private val pipeHighlightPaint = Paint().apply {
+        color = Color.parseColor("#81C784")
+        alpha = 160
+        isAntiAlias = true
+    }
+    private val pipeCapPaint = Paint().apply {
+        color = Color.parseColor("#388E3C")
+        isAntiAlias = true
+    }
+
+    // ---- Самолёт ----
+    private val fuselagePaint = Paint().apply {
+        color = Color.parseColor("#E53935")
+        isAntiAlias = true
+    }
+    private val fuselageOutlinePaint = Paint().apply {
+        color = Color.parseColor("#8B0000")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+        isAntiAlias = true
+    }
+    private val tailFinPaint = Paint().apply {
+        color = Color.parseColor("#B71C1C")
+        isAntiAlias = true
+    }
+    private val tailWingPaint = Paint().apply {
+        color = Color.parseColor("#C62828")
+        isAntiAlias = true
+    }
+    private val mainWingPaint = Paint().apply {
+        color = Color.parseColor("#ECEFF1")
+        isAntiAlias = true
+    }
+    private val mainWingOutlinePaint = Paint().apply {
+        color = Color.parseColor("#90A4AE")
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        isAntiAlias = true
+    }
+    private val spinnerBlurPaint = Paint().apply {
+        color = Color.parseColor("#BDBDBD")
+        alpha = 130
+        isAntiAlias = true
+    }
+    private val spinnerPaint = Paint().apply {
+        color = Color.parseColor("#424242")
+        isAntiAlias = true
+    }
+    private val windowPaint = Paint().apply {
+        color = Color.WHITE
+        isAntiAlias = true
+    }
+    private val windowRimPaint = Paint().apply {
+        color = Color.parseColor("#29B6F6")
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f
+        isAntiAlias = true
+    }
+    private val motionLinePaint = Paint().apply {
+        color = Color.WHITE
+        alpha = 150
+        strokeWidth = 4f
+        strokeCap = Paint.Cap.ROUND
+        isAntiAlias = true
+    }
+
+    // ---- Текст ----
     private val scorePaint = Paint().apply {
         color = Color.WHITE
         textSize = 90f
         textAlign = Paint.Align.CENTER
         isFakeBoldText = true
+        isAntiAlias = true
+        setShadowLayer(6f, 2f, 3f, Color.argb(160, 0, 0, 0))
     }
     private val messagePaint = Paint().apply {
         color = Color.WHITE
         textSize = 55f
         textAlign = Paint.Align.CENTER
+        isAntiAlias = true
+    }
+    private val messagePanelPaint = Paint().apply {
+        color = Color.BLACK
+        alpha = 110
+        isAntiAlias = true
     }
 
+    // ---- Форма самолёта (считается один раз при создании) ----
+    private val fuselagePath = Path()
+    private val tailFinPath = Path()
+    private val tailWingPath = Path()
+    private val mainWingPath = Path()
+    private var windowCx = 0f
+    private var windowCy = 0f
+    private var windowR = 0f
+    private var noseX = 0f
+    private var noseR = 0f
+    private var noseBlurR = 0f
+
     init {
+        buildPlaneShape()
         resetGame()
+    }
+
+    private fun buildPlaneShape() {
+        val half = planeSize / 2f
+        val bodyHalf = planeSize / 4f
+
+        fuselagePath.apply {
+            moveTo(-half * 0.6f, -bodyHalf * 0.65f)
+            lineTo(half * 0.55f, -bodyHalf * 0.65f)
+            lineTo(half * 0.85f, 0f)
+            lineTo(half * 0.55f, bodyHalf * 0.65f)
+            lineTo(-half * 0.6f, bodyHalf * 0.65f)
+            quadTo(-half * 0.78f, bodyHalf * 0.65f, -half * 0.78f, 0f)
+            quadTo(-half * 0.78f, -bodyHalf * 0.65f, -half * 0.6f, -bodyHalf * 0.65f)
+            close()
+        }
+
+        tailFinPath.apply {
+            moveTo(-half * 0.75f, -bodyHalf * 0.6f)
+            lineTo(-half * 0.55f, -bodyHalf * 0.6f)
+            lineTo(-half * 0.68f, -bodyHalf * 1.6f)
+            close()
+        }
+
+        tailWingPath.apply {
+            moveTo(-half * 0.78f, bodyHalf * 0.3f)
+            lineTo(-half * 0.55f, bodyHalf * 0.3f)
+            lineTo(-half * 0.85f, bodyHalf * 1.3f)
+            lineTo(-half * 0.95f, bodyHalf * 1.1f)
+            close()
+        }
+
+        mainWingPath.apply {
+            moveTo(-half * 0.15f, bodyHalf * 0.5f)
+            lineTo(half * 0.15f, bodyHalf * 0.5f)
+            lineTo(half * 0.05f, bodyHalf * 1.8f)
+            lineTo(-half * 0.35f, bodyHalf * 1.8f)
+            close()
+        }
+
+        windowCx = -half * 0.05f
+        windowCy = 0f
+        windowR = bodyHalf * 0.35f
+
+        noseX = half * 0.85f
+        noseR = bodyHalf * 0.25f
+        noseBlurR = bodyHalf * 0.55f
     }
 
     private fun resetGame() {
@@ -79,6 +246,22 @@ class GameView @JvmOverloads constructor(
         groundY = h * 0.85f
         planeX = w * 0.25f
         planeY = h * 0.4f
+
+        skyPaint.shader = LinearGradient(
+            0f, 0f, 0f, h.toFloat(),
+            Color.parseColor("#87CEEB"), Color.parseColor("#D2F3FE"),
+            Shader.TileMode.CLAMP
+        )
+        groundPaint.shader = LinearGradient(
+            0f, groundY, 0f, h.toFloat(),
+            Color.parseColor("#C68958"), Color.parseColor("#A9713F"),
+            Shader.TileMode.CLAMP
+        )
+
+        clouds.clear()
+        clouds.add(Cloud(w * 0.18f, h * 0.15f, 1f))
+        clouds.add(Cloud(w * 0.55f, h * 0.24f, 0.7f))
+        clouds.add(Cloud(w * 0.82f, h * 0.11f, 0.55f))
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -123,9 +306,15 @@ class GameView @JvmOverloads constructor(
             spawnPipe()
         }
 
-        // Хитбокс самолёта соответствует реально нарисованному прямоугольнику
-        // (ширина planeSize, высота planeSize/2), а не квадрату planeSize x planeSize.
-        // Небольшой отступ (margin) делает столкновения честнее визуально.
+        val cloudSpeed = pipeSpeed * 0.25f
+        for (cloud in clouds) {
+            cloud.x -= cloudSpeed
+            val margin = 140f * cloud.scale
+            if (cloud.x < -margin) {
+                cloud.x = width + margin
+            }
+        }
+
         val hitboxMargin = 8f
         val planeHalfWidth = planeSize / 2 - hitboxMargin
         val planeHalfHeight = planeSize / 4 - hitboxMargin
@@ -162,15 +351,12 @@ class GameView @JvmOverloads constructor(
     }
 
     private fun spawnPipe() {
-        // Проём всегда должен целиком помещаться на экране между верхом и землёй.
         val minGapTop = height * 0.12f
         val maxGapTop = (groundY - pipeGap - height * 0.08f).coerceAtLeast(minGapTop)
 
         val gapTop = if (lastGapTop == null || maxGapTop <= minGapTop) {
             Random.nextFloat() * (maxGapTop - minGapTop) + minGapTop
         } else {
-            // Ограничиваем, насколько сильно следующий проём может отличаться
-            // по высоте от предыдущего — иначе трубы становятся непроходимыми.
             val maxShift = height * maxGapShiftFraction
             val low = (lastGapTop!! - maxShift).coerceAtLeast(minGapTop)
             val high = (lastGapTop!! + maxShift).coerceAtMost(maxGapTop)
@@ -189,28 +375,99 @@ class GameView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), skyPaint)
 
+        val sunX = width * 0.82f
+        val sunY = height * 0.15f
+        canvas.drawCircle(sunX, sunY, 46f, sunGlowPaint)
+        canvas.drawCircle(sunX, sunY, 30f, sunPaint)
+
+        for (cloud in clouds) {
+            drawCloud(canvas, cloud.x, cloud.y, cloud.scale)
+        }
+
         for (pipe in pipes) {
-            canvas.drawRect(pipe.x, 0f, pipe.x + pipeWidth, pipe.gapTop, pipePaint)
-            canvas.drawRect(pipe.x, pipe.gapTop + pipeGap, pipe.x + pipeWidth, groundY, pipePaint)
+            drawPipe(canvas, pipe.x, 0f, pipe.gapTop, isTop = true)
+            drawPipe(canvas, pipe.x, pipe.gapTop + pipeGap, groundY, isTop = false)
         }
 
         canvas.drawRect(0f, groundY, width.toFloat(), height.toFloat(), groundPaint)
+        canvas.drawRect(0f, groundY, width.toFloat(), groundY + 10f, grassPaint)
 
         canvas.save()
         canvas.translate(planeX, planeY)
         canvas.rotate(planeRotation)
-        canvas.drawRect(-planeSize / 2, -planeSize / 4, planeSize / 2, planeSize / 4, planePaint)
-        canvas.drawCircle(planeSize / 5, 0f, planeSize / 6, planeWindowPaint)
+        drawPlane(canvas)
         canvas.restore()
 
         canvas.drawText(score.toString(), width / 2f, 150f, scorePaint)
 
         if (!isRunning && !isGameOver) {
-            canvas.drawText("Тапни по экрану, чтобы взлететь", width / 2f, height / 2f, messagePaint)
+            drawMessage(canvas, "Тапни по экрану, чтобы взлететь", height / 2f)
         }
         if (isGameOver) {
-            canvas.drawText("Игра окончена. Счёт: $score", width / 2f, height / 2f, messagePaint)
-            canvas.drawText("Тапни, чтобы начать заново", width / 2f, height / 2f + 90f, messagePaint)
+            drawMessage(canvas, "Игра окончена. Счёт: $score", height / 2f)
+            drawMessage(canvas, "Тапни, чтобы начать заново", height / 2f + 90f)
         }
     }
+
+    private fun drawCloud(canvas: Canvas, cx: Float, cy: Float, scale: Float) {
+        canvas.drawCircle(cx, cy, 20f * scale, cloudPaint)
+        canvas.drawCircle(cx + 18f * scale, cy - 4f * scale, 24f * scale, cloudPaint)
+        canvas.drawCircle(cx - 20f * scale, cy + 2f * scale, 16f * scale, cloudPaint)
+    }
+
+    private fun drawPipe(canvas: Canvas, x: Float, top: Float, bottom: Float, isTop: Boolean) {
+        val rect = RectF(x, top, x + pipeWidth, bottom)
+        canvas.drawRect(rect, pipePaint)
+        canvas.drawRect(rect, pipeOutlinePaint)
+
+        canvas.drawRect(x + pipeWidth * 0.12f, top, x + pipeWidth * 0.3f, bottom, pipeHighlightPaint)
+
+        val capHeight = 26f
+        val capOverhang = 10f
+        val capRect = if (isTop) {
+            RectF(x - capOverhang, bottom - capHeight, x + pipeWidth + capOverhang, bottom)
+        } else {
+            RectF(x - capOverhang, top, x + pipeWidth + capOverhang, top + capHeight)
+        }
+        canvas.drawRect(capRect, pipeCapPaint)
+        canvas.drawRect(capRect, pipeOutlinePaint)
+    }
+
+    private fun drawPlane(canvas: Canvas) {
+        if (isRunning) {
+            val half = planeSize / 2f
+            val bodyHalf = planeSize / 4f
+            canvas.drawLine(-half * 1.3f, -bodyHalf * 0.5f, -half * 0.95f, -bodyHalf * 0.5f, motionLinePaint)
+            canvas.drawLine(-half * 1.45f, 0f, -half * 0.95f, 0f, motionLinePaint)
+            canvas.drawLine(-half * 1.25f, bodyHalf * 0.5f, -half * 0.95f, bodyHalf * 0.5f, motionLinePaint)
+        }
+
+        canvas.drawPath(mainWingPath, mainWingPaint)
+        canvas.drawPath(mainWingPath, mainWingOutlinePaint)
+        canvas.drawPath(tailWingPath, tailWingPaint)
+        canvas.drawPath(tailFinPath, tailFinPaint)
+        canvas.drawPath(fuselagePath, fuselagePaint)
+        canvas.drawPath(fuselagePath, fuselageOutlinePaint)
+
+        canvas.drawCircle(noseX, 0f, noseBlurR, spinnerBlurPaint)
+        canvas.drawCircle(noseX, 0f, noseR, spinnerPaint)
+
+        canvas.drawCircle(windowCx, windowCy, windowR, windowPaint)
+        canvas.drawCircle(windowCx, windowCy, windowR, windowRimPaint)
+    }
+
+    private fun drawMessage(canvas: Canvas, text: String, y: Float) {
+        val textWidth = messagePaint.measureText(text)
+        val paddingH = 28f
+        val paddingV = 18f
+        val rect = RectF(
+            width / 2f - textWidth / 2f - paddingH,
+            y - messagePaint.textSize - paddingV / 2f,
+            width / 2f + textWidth / 2f + paddingH,
+            y + paddingV
+        )
+        canvas.drawRoundRect(rect, 20f, 20f, messagePanelPaint)
+        canvas.drawText(text, width / 2f, y, messagePaint)
+    }
+}
 }
