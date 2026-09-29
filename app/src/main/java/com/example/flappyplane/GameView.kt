@@ -19,10 +19,14 @@ class GameView @JvmOverloads constructor(
     private val gravity = 0.6f
     private val flapPower = -11f
     private val pipeWidth = 160f
-    private val pipeGap = 380f
+    private val pipeGap = 420f
     private val pipeSpeed = 6f
     private val planeSize = 90f
     private val pipeSpawnInterval = 90
+
+    // Насколько сильно может отличаться высота проёма от предыдущей трубы.
+    // Не даёт трубам "прыгать" слишком резко по высоте.
+    private val maxGapShiftFraction = 0.28f
 
     private var planeX = 0f
     private var planeY = 0f
@@ -32,6 +36,7 @@ class GameView @JvmOverloads constructor(
     private data class Pipe(var x: Float, val gapTop: Float, var scored: Boolean = false)
     private val pipes = mutableListOf<Pipe>()
     private var frameCount = 0
+    private var lastGapTop: Float? = null
 
     private var score = 0
     private var isRunning = false
@@ -63,6 +68,7 @@ class GameView @JvmOverloads constructor(
         planeVelocity = 0f
         pipes.clear()
         frameCount = 0
+        lastGapTop = null
         score = 0
         isGameOver = false
         isRunning = false
@@ -114,15 +120,18 @@ class GameView @JvmOverloads constructor(
         planeRotation = (planeVelocity * 2.5f).coerceIn(-30f, 70f)
 
         if (frameCount % pipeSpawnInterval == 0) {
-            val minGapTop = height * 0.15f
-            val maxGapTop = groundY - pipeGap - height * 0.1f
-            val gapTop = Random.nextFloat() * (maxGapTop - minGapTop) + minGapTop
-            pipes.add(Pipe(width.toFloat(), gapTop))
+            spawnPipe()
         }
 
+        // Хитбокс самолёта соответствует реально нарисованному прямоугольнику
+        // (ширина planeSize, высота planeSize/2), а не квадрату planeSize x planeSize.
+        // Небольшой отступ (margin) делает столкновения честнее визуально.
+        val hitboxMargin = 8f
+        val planeHalfWidth = planeSize / 2 - hitboxMargin
+        val planeHalfHeight = planeSize / 4 - hitboxMargin
         val planeRect = RectF(
-            planeX - planeSize / 2, planeY - planeSize / 2,
-            planeX + planeSize / 2, planeY + planeSize / 2
+            planeX - planeHalfWidth, planeY - planeHalfHeight,
+            planeX + planeHalfWidth, planeY + planeHalfHeight
         )
 
         val iterator = pipes.iterator()
@@ -147,9 +156,29 @@ class GameView @JvmOverloads constructor(
             }
         }
 
-        if (planeY + planeSize / 2 > groundY || planeY - planeSize / 2 < 0) {
+        if (planeY + planeHalfHeight > groundY || planeY - planeHalfHeight < 0) {
             gameOver()
         }
+    }
+
+    private fun spawnPipe() {
+        // Проём всегда должен целиком помещаться на экране между верхом и землёй.
+        val minGapTop = height * 0.12f
+        val maxGapTop = (groundY - pipeGap - height * 0.08f).coerceAtLeast(minGapTop)
+
+        val gapTop = if (lastGapTop == null || maxGapTop <= minGapTop) {
+            Random.nextFloat() * (maxGapTop - minGapTop) + minGapTop
+        } else {
+            // Ограничиваем, насколько сильно следующий проём может отличаться
+            // по высоте от предыдущего — иначе трубы становятся непроходимыми.
+            val maxShift = height * maxGapShiftFraction
+            val low = (lastGapTop!! - maxShift).coerceAtLeast(minGapTop)
+            val high = (lastGapTop!! + maxShift).coerceAtMost(maxGapTop)
+            if (high <= low) low else Random.nextFloat() * (high - low) + low
+        }
+
+        lastGapTop = gapTop
+        pipes.add(Pipe(width.toFloat(), gapTop))
     }
 
     private fun gameOver() {
@@ -176,7 +205,7 @@ class GameView @JvmOverloads constructor(
 
         canvas.drawText(score.toString(), width / 2f, 150f, scorePaint)
 
-            if (!isRunning && !isGameOver) {
+        if (!isRunning && !isGameOver) {
             canvas.drawText("Тапни по экрану, чтобы взлететь", width / 2f, height / 2f, messagePaint)
         }
         if (isGameOver) {
